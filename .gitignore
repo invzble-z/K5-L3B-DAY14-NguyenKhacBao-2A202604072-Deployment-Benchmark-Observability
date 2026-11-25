@@ -34,3 +34,6 @@ Thumbs.db
 # ── Docker volumes (local dev) ─────────────────────��──────
 data/
 volumes/
+
+# ── Local progress tracker (not for submission) ──────────
+LAB14_PROGRESS_TRACKER.svg
