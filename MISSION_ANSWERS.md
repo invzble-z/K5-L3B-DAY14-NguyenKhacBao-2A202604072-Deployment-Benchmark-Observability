@@ -201,7 +201,35 @@ Content-Type: application/json
 
 ### Exercise 3.1 / 3.2: Deploy lên Render & kiểm thử URL public
 
-*(Đang chờ thực hiện ở CP6)*
+- **Nền tảng chọn triển khai:** **Render** (Web Service `day14-production-agent`, Root Directory `06-lab-complete`, Runtime `Docker`, Region `Singapore`, Plan `Free`, Health Check Path `/health`), kết nối với **Render Key Value (Redis)** cùng region Singapore qua biến `REDIS_URL`.
+- **Public URL:** `https://day14-production-agent-lypk.onrender.com`
+- **Các biến môi trường đã đặt trên Render Dashboard (không ghi trong code):** `AGENT_API_KEY`, `REDIS_URL`, `ENVIRONMENT=production`, `LOG_LEVEL=INFO`, `RATE_LIMIT_PER_MINUTE=10`, `DAILY_BUDGET_USD=10.0` (và `PORT` do Render tự cấp: `10000`).
+- **Screenshots:**
+  - [Dashboard & Environment Variables](screenshots/dashboard.png)
+  - [Service Running Logs](screenshots/running.png)
+  - [Public URL Test Results](screenshots/test.png)
+
+**Kết quả 4 lệnh tự kiểm CP6 trên URL public:**
+```bash
+BASE="https://day14-production-agent-lypk.onrender.com"
+curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/health"
+curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/ready"
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -d '{"question":"Hello"}'
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -H "X-API-Key: $AGENT_API_KEY" -d '{"question":"Hello"}'
+```
+Kết quả thực tế nhận được:
+```text
+200
+200
+401
+200
+```
+
+**Kiểm tra nội dung JSON trả về thực tế từ URL public:**
+- `GET /health` (`200`): `{"status":"ok","environment":"production","uptime_seconds":463.78}`
+- `GET /ready` (`200`): `{"status":"ready","redis":"connected"}`
+- `POST /ask` (không có key / sai key → `401`): `{"detail":"Invalid or missing API key"}`
+- `POST /ask` (đúng `X-API-Key`, `"What is deployment?"` → `200`): `{"question":"What is deployment?","answer":"Deployment là quá trình đưa code từ máy bạn lên server để người khác dùng được.","usage":{"input_tokens":6,"output_tokens":32,"cost_usd":2.01e-05,"rate_limit_remaining":9}}`
 
 ### So sánh `railway.toml` vs `render.yaml`
 
@@ -441,17 +469,18 @@ Total messages: 10
 
 ## Part 6: Final Project — Output `check_production_ready.py`
 
-Chạy chế độ đầy đủ (có Docker, trên WSL2 Ubuntu-24.04 `os.name == 'posix'`) tại thư mục `06-lab-complete/`:
+Chạy chế độ đầy đủ kèm kiểm thử URL public trên WSL2 Ubuntu-24.04 (`os.name == 'posix'`) tại thư mục `06-lab-complete/`:
 
 ```bash
-python check_production_ready.py
+python check_production_ready.py --public-url https://day14-production-agent-lypk.onrender.com
 ```
 
-- **Docker image:** `270 MB` (< 500 MB), build `34s`, `python:3.11-slim` multi-stage, user non-root `appuser`, `HEALTHCHECK`.
-- **Rate limit & Stateless:** `429` sau đúng 5 request (`RATE_LIMIT_PER_MINUTE=5`, kèm `Retry-After`) và vẫn giữ `429` sau khi restart agent (lưu Redis Sorted Set).
+- **Docker image:** `270 MB` (< 500 MB), build `8s` (cached layers), `python:3.11-slim` multi-stage, user non-root, `HEALTHCHECK`.
+- **Rate limit & Stateless:** `429` sau đúng 5 request (`RATE_LIMIT_PER_MINUTE=5`) và vẫn giữ `429` sau khi restart agent (lưu Redis Sorted Set).
 - **Readiness & Cost guard:** `/ready` trả `200` khi Redis sống và `503` khi mất kết nối Redis (trong khi `/health` vẫn `200`); vượt ngân sách trả `402`.
-- **Structured logging:** 17 dòng log JSON hợp lệ (`JsonFormatter`).
-- **Graceful shutdown:** `SIGTERM` lúc đang có in-flight request vẫn trả `200` và thoát `exit code 0`; `docker stop` thoát `exit code 0` trong `0.9s` (< 10s).
+- **Structured logging:** `17 dòng JSON` log hợp lệ (`JsonFormatter`).
+- **Graceful shutdown:** `SIGTERM` lúc đang có in-flight request vẫn trả `200` và thoát `exit code 0`; `docker stop` thoát `exit code 0` trong `0.8s` (< 10s).
+- **Public URL check:** `GET https://day14-production-agent-lypk.onrender.com/health → 200`.
 
 ```text
 ================================================================
@@ -469,7 +498,7 @@ python check_production_ready.py
      ✅ Graceful shutdown
      ✅ Public URL ready (Railway / Render config)
 ----------------------------------------------------------------
-  Result: 12/12 tiêu chí đạt · 43/43 checks passed
+  Result: 12/12 tiêu chí đạt · 44/44 checks passed
   🎉 PASS 12/12 — PRODUCTION READY! Deploy nào!
 ================================================================
 ```
@@ -486,3 +515,6 @@ python check_production_ready.py
 | 2026-11-26 | CP3 | Phân tích `04-api-gateway/` (`auth.py`, `rate_limiter.py`, `cost_guard.py`) và chạy kiểm thử API Key, JWT, Rate Limit và Cost Guard | Giải thích luồng JWT, Sliding Window, thiết kế Redis Cost Guard và lý do kết hợp Rate Limit + Cost Guard | Chạy thực tế cả hai app `develop` và `production` trong WSL2, tự lấy JWT qua `/auth/token` (`student`/`demo123`), xác nhận `401`/`403`/`200`/`429` (`Retry-After: 59`) và che token trước khi dán |
 | 2026-11-26 | CP4 | Phân tích liveness/readiness, SIGTERM graceful shutdown và thiết kế stateless trong `05-scaling-reliability/`, chạy stack 3 instance với Nginx & Redis | Giải thích khác biệt `/health` vs `/ready`, cơ chế Redis `SETEX`/`GET` và cấu hình Nginx upstream `proxy_next_upstream` | Chạy thực tế `develop/app.py` (xác nhận in-flight request vẫn trả 200 sau `kill -TERM`), bật `docker compose -p k5-day14-scaling up -d --build --scale agent=3` và chạy `test_stateless.py` xác nhận 3 instance phục vụ chung 1 session (10 tin nhắn) |
 | 2026-11-26 | CP5 | Hoàn thiện các file TODO trong `06-lab-complete/` (`config.py`, `redis_client.py`, `auth.py`, `rate_limiter.py`, `cost_guard.py`, `main.py`, `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example`, `railway.toml`, `render.yaml`) | Thiết kế các module đạt đủ hợp đồng 12 tiêu chí (Redis ZSET sliding window, Redis daily/monthly budget 402, `JsonFormatter`, `lifespan` + chuyển tiếp `SIGTERM`, multi-stage venv `/opt/venv` + `exec uvicorn`) | Kiểm tra tĩnh (`--static-only` 28/28) rồi chạy kiểm tra đầy đủ `python check_production_ready.py` trong WSL2 Ubuntu-24.04 với Docker, đạt `PASS 12/12` (43/43 checks, image 270 MB, `docker stop` 0.9s) và xác minh không sửa `check_production_ready.py` |
+| 2026-11-26 | CP6 | Hướng dẫn cấu hình Render (Web Service Docker + Key Value Redis cùng region Singapore), lập `DEPLOYMENT.md` và hoàn thiện Part 3 | Lập danh sách cấu hình Render Root Directory `06-lab-complete`, biến môi trường qua Dashboard (không ghi secret trong code), mẫu `DEPLOYMENT.md` và bảng so sánh `railway.toml` vs `render.yaml` | Tự tạo Render Web Service `day14-production-agent` + Key Value Redis, xác minh log `redis_ready: true`, chạy kiểm thử 4 lệnh CP6 (`/health` 200, `/ready` 200, `/ask` 401 & 200) và `check_production_ready.py --public-url` |
+| 2026-11-26 | CP7 | Chạy benchmark local (`develop/`): thêm metric `agent_question_length_chars`, load test `c=1/10/50/100`, so sánh `MOCK_SLOW_RATE`, eval `v1` vs `v2` và sửa `KNOWLEDGE_BASE` | Bổ sung 2 tài liệu `hpa`/`kubernetes` và `jwt` vào `mock_llm.py` (không sửa `golden_dataset.jsonl`), giải thích tail latency và CI quality gate | Tự chạy toàn bộ `load_test.py` & `run_eval.py` sinh 10 file JSON trong `reports/`, xác minh `eval_v2_fixed.json` đạt `23/23` (100%, 0 regression), kiểm chứng `v1` trả exit code `1`, điền số liệu thật vào `BENCHMARK_REPORT.md` |
+| 2026-11-26 | CP8 | Vận hành stack Observability (`production/`) với `-p k5-day14-observability`, benchmark Locust headless `scale=1` vs `scale=3`, truy vết Jaeger và chạy thí nghiệm chaos A–E | Sửa thiếu `ENV PYTHONUSERBASE=/home/agent/.local` trong `production/Dockerfile`, chạy `promtool test rules`, chụp Grafana/Jaeger/Prometheus và đo thời gian alert firing | Kiểm chứng `promtool` SUCCESS, chạy thật `scale=1` (`p95=1000ms`) vs `scale=3` (`p95=250ms`), đối chiếu `trace_id` `44c7380b6c4e110926381faa08bffb27` giữa Jaeger và JSON log, đo thời gian firing A (`72.5s`), D (`39.3s`), B (`141.9s`), C (`142.0s`), xác minh A+D cùng firing trên ảnh và dọn stack sạch sẽ |
